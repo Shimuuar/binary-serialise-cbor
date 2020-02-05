@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE DefaultSignatures   #-}
 {-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE PolyKinds           #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies        #-}
@@ -1468,14 +1469,26 @@ class GSerialiseDecode f where
     -- | @since 0.2.0.0
     gdecode  :: Decoder s (f a)
 
+class GSerialiseDecodeType f where
+    gdecodeTy :: String -> Decoder s (f a)
+
+instance (Datatype c, GSerialiseDecodeType a) => GSerialiseDecode (M1 D c a) where
+    gdecode = r
+      where
+        r  = M1 <$> gdecodeTy (datatypeName ty)
+        -- Very roundabout way for extracting type name
+        ty = undefined `asTypeParam` (undefined `asTypeOf` r)
+        asTypeParam :: x -> g x -> x
+        asTypeParam x _ = x
+
 -- | @since 0.2.0.0
 instance GSerialiseEncode V1 where
     -- Data types without constructors are still serialised as null value
     gencode _ = encodeNull
 
 -- | @since 0.2.0.0
-instance GSerialiseDecode V1 where
-    gdecode   = error "V1 don't have contructors" <$ decodeNull
+instance GSerialiseDecodeType V1 where
+    gdecodeTy nm = error (nm ++ " don't have contructors") <$ decodeNull
 
 -- | @since 0.2.0.0
 instance GSerialiseEncode U1 where
@@ -1483,12 +1496,12 @@ instance GSerialiseEncode U1 where
     gencode _ = encodeListLen 1 <> encodeWord 0
 
 -- | @since 0.2.0.0
-instance GSerialiseDecode U1 where
-    gdecode   = do
+instance GSerialiseDecodeType U1 where
+    gdecodeTy nm = do
       n <- decodeListLen
-      when (n /= 1) $ fail "expect list of length 1"
+      when (n /= 1) $ fail $ nm ++ ": expect list of length 1"
       tag <- decodeWord
-      when (tag /= 0) $ fail "unexpected tag. Expect 0"
+      when (tag /= 0) $ fail $ nm ++ ": unexpected tag. Expect 0"
       return U1
 
 -- | @since 0.2.0.0
@@ -1497,8 +1510,8 @@ instance GSerialiseEncode a => GSerialiseEncode (M1 i c a) where
     gencode = gencode . unM1
 
 -- | @since 0.2.0.0
-instance GSerialiseDecode a => GSerialiseDecode (M1 i c a) where
-    gdecode = M1 <$> gdecode
+instance GSerialiseDecodeType a => GSerialiseDecodeType (M1 i c a) where
+    gdecodeTy nm = M1 <$> gdecodeTy nm
 
 -- | @since 0.2.0.0
 instance Serialise a => GSerialiseEncode (K1 i a) where
@@ -1509,14 +1522,14 @@ instance Serialise a => GSerialiseEncode (K1 i a) where
                   <> encode a
 
 -- | @since 0.2.0.0
-instance Serialise a => GSerialiseDecode (K1 i a) where
-    gdecode = do
+instance Serialise a => GSerialiseDecodeType (K1 i a) where
+    gdecodeTy nm = do
       n <- decodeListLen
       when (n /= 2) $
-        fail "expect list of length 2"
+        fail $ nm ++ ": expect list of length 2"
       tag <- decodeWord
       when (tag /= 0) $
-        fail "unexpected tag. Expects 0"
+        fail $ nm ++ ": unexpected tag. Expects 0"
       K1 <$> decode
 
 -- | @since 0.2.0.0
@@ -1529,16 +1542,16 @@ instance (GSerialiseProd f, GSerialiseProd g) => GSerialiseEncode (f :*: g) wher
        <> encodeSeq g
 
 -- | @since 0.2.0.0
-instance (GSerialiseProd f, GSerialiseProd g) => GSerialiseDecode (f :*: g) where
-    gdecode = do
+instance (GSerialiseProd f, GSerialiseProd g) => GSerialiseDecodeType (f :*: g) where
+    gdecodeTy nm = do
       let nF = nFields (Proxy :: Proxy (f :*: g))
       n <- decodeListLen
       -- TODO FIXME: signedness of list length
       when (fromIntegral n /= nF + 1) $
-        fail $ "Wrong number of fields: expected="++show (nF+1)++" got="++show n
+        fail $ nm ++ ": Wrong number of fields: expected="++show (nF+1)++" got="++show n
       tag <- decodeWord
       when (tag /= 0) $
-        fail $ "unexpect tag (expect 0)"
+        fail $ nm ++ ": unexpect tag (expect 0)"
       !f <- gdecodeSeq
       !g <- gdecodeSeq
       return $ f :*: g
@@ -1552,16 +1565,16 @@ instance (GSerialiseSum f, GSerialiseSum g) => GSerialiseEncode (f :+: g) where
              <> encodeSum a
 
 -- | @since 0.2.0.0
-instance (GSerialiseSum f, GSerialiseSum g) => GSerialiseDecode (f :+: g) where
-    gdecode = do
+instance (GSerialiseSum f, GSerialiseSum g) => GSerialiseDecodeType (f :+: g) where
+    gdecodeTy nm = do
         n <- decodeListLen
         -- TODO FIXME: Again signedness
         when (n == 0) $
-          fail "Empty list encountered for sum type"
+          fail $ nm ++ ": Empty list encountered for sum type"
         nCon  <- decodeWord
         trueN <- fieldsForCon (Proxy :: Proxy (f :+: g)) nCon
         when (n-1 /= fromIntegral trueN ) $
-          fail $ "Number of fields mismatch: expected="++show trueN++" got="++show n
+          fail $ nm ++ ": Number of fields mismatch: expected="++show trueN++" got="++show (n-1)
         decodeSum nCon
 
 
